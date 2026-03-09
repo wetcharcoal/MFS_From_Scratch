@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "canisters": {
+    "aseed_backend": {
+      "type": "motoko",
+      "main": "backend/main.mo",
+      "dependencies": [],
+      "declarations": {
+        "output": "frontend/src/declarations"
+      }
+    },
+    "aseed_frontend": {
+      "type": "assets",
+      "source": ["frontend/dist"],
+      "dependencies": ["aseed_backend"]
+    }
+  },
+  "defaults": {
+    "build": {
+      "packtool": "",
+      "args": ""
+    },
+    "start": {
+      "address": "127.0.0.1",
+      "port": 4943
+    }
+  },
+  "output_env_file": ".env",
+  "networks": {
+    "local": {
+      "bind": "127.0.0.1:4943",
+      "type": "ephemeral",
+      "providers": ["http://127.0.0.1:4943"]
+    },
+    "ic": {
+      "providers": ["https://mainnet.dfinity.network"],
+      "type": "persistent"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[package]
+name = "aseed"
+version = "0.1.0"
+description = "A Seed ICP Exchange Platform - Resource/need matching for food groups"
+repository = "https://github.com/example/aseed"
+keywords = ["icp", "internet-computer", "motoko", "exchange"]
+license = "MIT"
+
+[dependencies]
+base = "0.13.3"
