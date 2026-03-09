@@ -1,0 +1,11 @@
+// Version: 1.0.0
+actor {
+  stable var _groupCreationDay : Int;
+  stable var _groupsCreatedToday : Nat;
+  stable var _nextEventId : Nat;
+  stable var _nextGroupId : Nat;
+  stable var _nextJoinRequestId : Nat;
+  stable var _nextNeedId : Nat;
+  stable var _nextResourceId : Nat;
+  stable var _nextUserId : Nat
+};
