@@ -55,6 +55,11 @@ module {
     suspended : Bool;
   };
 
+  public type SocialLink = {
+    platform : Text;
+    url : Text;
+  };
+
   public type Group = {
     id : Text;
     name : Text;
@@ -63,6 +68,9 @@ module {
     roles : [GroupRole];
     address : ?Text;
     phone : ?Text;
+    website : ?Text;
+    socialLinks : [SocialLink];
+    profilePicturePath : ?Text;
     createdAtNs : Int;
   };
 

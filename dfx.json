@@ -12,7 +12,7 @@
     "aseed_frontend": {
       "type": "assets",
       "source": ["frontend/dist"],
-      "dependencies": ["aseed_backend"]
+      "dependencies": []
     }
   },
   "defaults": {
@@ -29,8 +29,7 @@
   "networks": {
     "local": {
       "bind": "127.0.0.1:4943",
-      "type": "ephemeral",
-      "providers": ["http://127.0.0.1:4943"]
+      "type": "ephemeral"
     },
     "ic": {
       "providers": ["https://mainnet.dfinity.network"],

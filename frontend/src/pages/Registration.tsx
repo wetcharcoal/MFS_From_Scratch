@@ -43,7 +43,7 @@ export default function Registration() {
     }
     setLoading(true);
     try {
-      const result = await actor.create_group(name, email, roles, [], []);
+      const result = await actor.create_group(name, email, roles, [], [], [], [], []);
       if (result && result.length > 0) {
         addToast("Group created", "success");
         navigate("/");
