@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
     plugins: [react()],
     define: {
+        global: "globalThis",
         "process.env.CANISTER_ID_ASEED_BACKEND": JSON.stringify(process.env.VITE_CANISTER_ID_ASEED_BACKEND || "rrkah-fqaaa-aaaaa-aaaaq-cai"),
         "process.env.DFX_NETWORK": JSON.stringify(process.env.DFX_NETWORK || "local"),
     },

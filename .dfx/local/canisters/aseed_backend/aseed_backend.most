@@ -1,5 +1,101 @@
 // Version: 1.0.0
+type Category__54548779 =
+  {
+    #DistributionSpace;
+    #Equipment;
+    #EventSpace;
+    #FoodDrink;
+    #KitchenSpace;
+    #Other;
+    #Publicity;
+    #StorageSpace
+  };
+type DateRange__205569186 = {endNs : Int; startNs : Int};
+type Event__652276718 = Event__820126843;
+type Event__820126843 =
+  {
+    createdAtNs : Int;
+    dateRange : DateRange__205569186;
+    groupId : Text;
+    id : Text;
+    timeRange : Text;
+    title : Text
+  };
+type GroupRole__24358638 =
+  {
+    #distribution;
+    #educationInformation;
+    #equipmentSpace;
+    #processing;
+    #production;
+    #wasteManagement
+  };
+type Group__1001418519 = Group__264339057;
+type Group__264339057 =
+  {
+    address : ?Text;
+    createdAtNs : Int;
+    email : Text;
+    id : Text;
+    name : Text;
+    phone : ?Text;
+    profilePicturePath : ?Text;
+    roles : [GroupRole__24358638];
+    socialLinks : [SocialLink__645150532];
+    userIds : [Text];
+    website : ?Text
+  };
+type JoinRequest__464910720 =
+  {
+    createdAtNs : Int;
+    groupId : Text;
+    id : Text;
+    resolvedAtNs : ?Int;
+    status : {#approved; #denied; #pending};
+    userId : Text
+  };
+type JoinRequest__974408126 = JoinRequest__464910720;
+type Need__338496962 = Need__647985024;
+type Need__647985024 =
+  {
+    category : Category__54548779;
+    createdAtNs : Int;
+    dateRange : ?DateRange__205569186;
+    description : Text;
+    groupId : Text;
+    id : Text;
+    title : Text
+  };
+type Resource__741161155 =
+  {
+    category : Category__54548779;
+    createdAtNs : Int;
+    dateRange : ?DateRange__205569186;
+    description : Text;
+    groupId : Text;
+    id : Text;
+    title : Text
+  };
+type Resource__830353893 = Resource__741161155;
+type SocialLink__645150532 = {platform : Text; url : Text};
+type Tree__88811077<K, V> =
+  {
+    #black : (Tree__88811077<K, V>, K, V, Tree__88811077<K, V>);
+    #leaf;
+    #red : (Tree__88811077<K, V>, K, V, Tree__88811077<K, V>)
+  };
+type User__565620925 =
+  {
+    activeGroupId : ?Text;
+    displayName : Text;
+    groupIds : [Text];
+    id : Text;
+    principal : Principal;
+    suspended : Bool
+  };
+type User__778830278 = User__565620925;
 actor {
+  stable var _assetStorageCanisterId : ?Principal;
   stable var _groupCreationDay : Int;
   stable var _groupsCreatedToday : Nat;
   stable var _nextEventId : Nat;
@@ -7,5 +103,23 @@ actor {
   stable var _nextJoinRequestId : Nat;
   stable var _nextNeedId : Nat;
   stable var _nextResourceId : Nat;
-  stable var _nextUserId : Nat
+  stable var _nextUserId : Nat;
+  stable var _schemaVersion : Nat;
+  stable var admins : {root : Tree__88811077<Principal, Bool>; size : Nat};
+  stable var events :
+    {root : Tree__88811077<Text, Event__652276718>; size : Nat};
+  stable var groups :
+    {root : Tree__88811077<Text, Group__1001418519>; size : Nat};
+  stable var joinRequests :
+    {root : Tree__88811077<Text, JoinRequest__974408126>; size : Nat};
+  stable var needs :
+    {root : Tree__88811077<Text, Need__338496962>; size : Nat};
+  stable var principalToUserId :
+    {root : Tree__88811077<Principal, Text>; size : Nat};
+  stable var resources :
+    {root : Tree__88811077<Text, Resource__830353893>; size : Nat};
+  stable var userJoinRequests :
+    {root : Tree__88811077<Text, [Text]>; size : Nat};
+  stable var users :
+    {root : Tree__88811077<Text, User__778830278>; size : Nat}
 };

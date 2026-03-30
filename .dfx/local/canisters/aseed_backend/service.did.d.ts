@@ -21,12 +21,15 @@ export interface Event {
 }
 export interface Group {
   'id' : string,
+  'socialLinks' : Array<SocialLink>,
   'name' : string,
   'createdAtNs' : bigint,
   'userIds' : Array<string>,
   'email' : string,
+  'website' : [] | [string],
   'address' : [] | [string],
   'phone' : [] | [string],
+  'profilePicturePath' : [] | [string],
   'roles' : Array<GroupRole>,
 }
 export type GroupRole = { 'production' : null } |
@@ -54,6 +57,8 @@ export interface Need {
   'category' : Category,
   'dateRange' : [] | [DateRange],
 }
+export type ProfileAssetResult = { 'ok' : string } |
+  { 'err' : string };
 export interface Resource {
   'id' : string,
   'title' : string,
@@ -63,6 +68,7 @@ export interface Resource {
   'category' : Category,
   'dateRange' : [] | [DateRange],
 }
+export interface SocialLink { 'url' : string, 'platform' : string }
 export interface User {
   'id' : string,
   'principal' : Principal,
@@ -72,16 +78,42 @@ export interface User {
   'suspended' : boolean,
 }
 export interface _SERVICE {
+  'admin_get_asset_storage_canister' : ActorMethod<[], [] | [Principal]>,
   'admin_remove_group' : ActorMethod<[string], boolean>,
+  /**
+   * / Optional: override asset canister principal (defaults to `canister:aseed_frontend` from dfx).
+   * / One-time local setup (controllers alone do not grant Commit on modern asset canisters):
+   * / - dfx canister update-settings aseed_frontend --add-controller "$(dfx canister id aseed_backend)"
+   * / - dfx canister call aseed_frontend authorize "(principal \"$(dfx canister id aseed_backend)\")"
+   */
+  'admin_set_asset_storage_canister' : ActorMethod<[Principal], boolean>,
   'admin_update_group' : ActorMethod<
-    [string, [] | [string], [] | [string], [] | [string], [] | [string]],
+    [
+      string,
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      [] | [Array<SocialLink>],
+      [] | [string],
+    ],
     boolean
   >,
   'approve_join_request' : ActorMethod<[string], boolean>,
   'assign_role' : ActorMethod<[Principal], boolean>,
   'create_event' : ActorMethod<[string, DateRange, string], [] | [Event]>,
   'create_group' : ActorMethod<
-    [string, string, Array<GroupRole>, [] | [string], [] | [string]],
+    [
+      string,
+      string,
+      Array<GroupRole>,
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      Array<SocialLink>,
+      [] | [string],
+    ],
     [] | [Group]
   >,
   'create_need' : ActorMethod<
@@ -94,6 +126,7 @@ export interface _SERVICE {
   >,
   'create_user' : ActorMethod<[string], [] | [User]>,
   'delete_event' : ActorMethod<[string], boolean>,
+  'delete_group_profile_asset' : ActorMethod<[string], ProfileAssetResult>,
   'delete_me' : ActorMethod<[], boolean>,
   'delete_need' : ActorMethod<[string], boolean>,
   'delete_resource' : ActorMethod<[string], boolean>,
@@ -119,6 +152,7 @@ export interface _SERVICE {
   'get_pending_join_requests' : ActorMethod<[string], Array<JoinRequest>>,
   'get_user' : ActorMethod<[string], [] | [User]>,
   'health' : ActorMethod<[], string>,
+  'is_admin' : ActorMethod<[], boolean>,
   'list_all_users' : ActorMethod<[], Array<User>>,
   'list_events' : ActorMethod<[], Array<Event>>,
   'list_groups' : ActorMethod<[], Array<Group>>,
@@ -127,6 +161,13 @@ export interface _SERVICE {
   'remove_group' : ActorMethod<[string], boolean>,
   'request_join_group' : ActorMethod<[string], [] | [JoinRequest]>,
   'set_active_group' : ActorMethod<[[] | [string]], boolean>,
+  /**
+   * / Group members upload profile images via the backend so the asset canister sees the backend as caller (controller).
+   */
+  'store_group_profile_asset' : ActorMethod<
+    [string, string, Uint8Array | number[], string, Uint8Array | number[]],
+    ProfileAssetResult
+  >,
   'suspend_user' : ActorMethod<[string], boolean>,
   'unsuspend_user' : ActorMethod<[string], boolean>,
   'update_display_name' : ActorMethod<[string], boolean>,
@@ -135,7 +176,16 @@ export interface _SERVICE {
     boolean
   >,
   'update_group' : ActorMethod<
-    [string, [] | [string], [] | [string], [] | [string], [] | [string]],
+    [
+      string,
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      [] | [string],
+      [] | [Array<SocialLink>],
+      [] | [string],
+    ],
     boolean
   >,
 }

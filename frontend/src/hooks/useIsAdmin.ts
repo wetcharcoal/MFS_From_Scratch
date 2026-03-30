@@ -9,9 +9,9 @@ export function useIsAdmin() {
 
   useEffect(() => {
     if (!actor || !identity) return;
-    // Check if caller can list_all_users (admin only)
-    actor.list_all_users()
-      .then(() => setIsAdmin(true))
+    actor
+      .is_admin()
+      .then(setIsAdmin)
       .catch(() => setIsAdmin(false));
   }, [actor, identity]);
 

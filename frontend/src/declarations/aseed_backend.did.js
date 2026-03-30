@@ -1,4 +1,5 @@
 export const idlFactory = ({ IDL }) => {
+  const SocialLink = IDL.Record({ 'url' : IDL.Text, 'platform' : IDL.Text });
   const DateRange = IDL.Record({ 'startNs' : IDL.Int, 'endNs' : IDL.Int });
   const Event = IDL.Record({
     'id' : IDL.Text,
@@ -18,12 +19,15 @@ export const idlFactory = ({ IDL }) => {
   });
   const Group = IDL.Record({
     'id' : IDL.Text,
+    'socialLinks' : IDL.Vec(SocialLink),
     'name' : IDL.Text,
     'createdAtNs' : IDL.Int,
     'userIds' : IDL.Vec(IDL.Text),
     'email' : IDL.Text,
+    'website' : IDL.Opt(IDL.Text),
     'address' : IDL.Opt(IDL.Text),
     'phone' : IDL.Opt(IDL.Text),
+    'profilePicturePath' : IDL.Opt(IDL.Text),
     'roles' : IDL.Vec(GroupRole),
   });
   const Category = IDL.Variant({
@@ -62,6 +66,7 @@ export const idlFactory = ({ IDL }) => {
     'groupIds' : IDL.Vec(IDL.Text),
     'suspended' : IDL.Bool,
   });
+  const ProfileAssetResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const JoinRequest = IDL.Record({
     'id' : IDL.Text,
     'status' : IDL.Variant({
@@ -75,13 +80,26 @@ export const idlFactory = ({ IDL }) => {
     'groupId' : IDL.Text,
   });
   return IDL.Service({
+    'admin_get_asset_storage_canister' : IDL.Func(
+        [],
+        [IDL.Opt(IDL.Principal)],
+        ['query'],
+      ),
     'admin_remove_group' : IDL.Func([IDL.Text], [IDL.Bool], []),
+    'admin_set_asset_storage_canister' : IDL.Func(
+        [IDL.Principal],
+        [IDL.Bool],
+        [],
+      ),
     'admin_update_group' : IDL.Func(
         [
           IDL.Text,
           IDL.Opt(IDL.Text),
           IDL.Opt(IDL.Text),
           IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Vec(SocialLink)),
           IDL.Opt(IDL.Text),
         ],
         [IDL.Bool],
@@ -101,6 +119,9 @@ export const idlFactory = ({ IDL }) => {
           IDL.Vec(GroupRole),
           IDL.Opt(IDL.Text),
           IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Text),
+          IDL.Vec(SocialLink),
+          IDL.Opt(IDL.Text),
         ],
         [IDL.Opt(Group)],
         [],
@@ -117,6 +138,11 @@ export const idlFactory = ({ IDL }) => {
       ),
     'create_user' : IDL.Func([IDL.Text], [IDL.Opt(User)], []),
     'delete_event' : IDL.Func([IDL.Text], [IDL.Bool], []),
+    'delete_group_profile_asset' : IDL.Func(
+        [IDL.Text],
+        [ProfileAssetResult],
+        [],
+      ),
     'delete_me' : IDL.Func([], [IDL.Bool], []),
     'delete_need' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'delete_resource' : IDL.Func([IDL.Text], [IDL.Bool], []),
@@ -156,6 +182,7 @@ export const idlFactory = ({ IDL }) => {
       ),
     'get_user' : IDL.Func([IDL.Text], [IDL.Opt(User)], ['query']),
     'health' : IDL.Func([], [IDL.Text], ['query']),
+    'is_admin' : IDL.Func([], [IDL.Bool], ['query']),
     'list_all_users' : IDL.Func([], [IDL.Vec(User)], ['query']),
     'list_events' : IDL.Func([], [IDL.Vec(Event)], ['query']),
     'list_groups' : IDL.Func([], [IDL.Vec(Group)], ['query']),
@@ -164,6 +191,11 @@ export const idlFactory = ({ IDL }) => {
     'remove_group' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'request_join_group' : IDL.Func([IDL.Text], [IDL.Opt(JoinRequest)], []),
     'set_active_group' : IDL.Func([IDL.Opt(IDL.Text)], [IDL.Bool], []),
+    'store_group_profile_asset' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Vec(IDL.Nat8), IDL.Text, IDL.Vec(IDL.Nat8)],
+        [ProfileAssetResult],
+        [],
+      ),
     'suspend_user' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'unsuspend_user' : IDL.Func([IDL.Text], [IDL.Bool], []),
     'update_display_name' : IDL.Func([IDL.Text], [IDL.Bool], []),
@@ -178,6 +210,9 @@ export const idlFactory = ({ IDL }) => {
           IDL.Opt(IDL.Text),
           IDL.Opt(IDL.Text),
           IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Text),
+          IDL.Opt(IDL.Vec(SocialLink)),
           IDL.Opt(IDL.Text),
         ],
         [IDL.Bool],

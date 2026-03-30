@@ -1,21 +1,25 @@
 // Access control - admin role checks
-// State lives in main.mo
+// State lives in main.mo (stable OrderedMap for upgrade persistence).
 
+import OrderedMap "mo:base/OrderedMap";
 import Principal "mo:base/Principal";
-import HashMap "mo:base/HashMap";
 
 module {
-  public type AdminSet = HashMap.HashMap<Principal, ()>;
+  public type AdminSet = OrderedMap.Map<Principal, Bool>;
 
-  public func createAdminSet() : AdminSet {
-    HashMap.HashMap<Principal, ()>(10, Principal.equal, Principal.hash)
+  func ops() : OrderedMap.Operations<Principal> {
+    OrderedMap.Make<Principal>(Principal.compare)
   };
 
-  public func addAdmin(admins : AdminSet, principal : Principal) : () {
-    admins.put(principal, ())
+  public func createAdminSet() : AdminSet {
+    ops().empty<Bool>()
+  };
+
+  public func addAdmin(admins : AdminSet, principal : Principal) : AdminSet {
+    ops().put(admins, principal, true)
   };
 
   public func isAdmin(admins : AdminSet, principal : Principal) : Bool {
-    switch (admins.get(principal)) { case (?_) true; case null false }
+    switch (ops().get(admins, principal)) { case (?true) true; case _ false }
   };
 };

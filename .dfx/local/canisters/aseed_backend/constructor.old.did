@@ -7,6 +7,11 @@ type User =
    "principal": principal;
    suspended: bool;
  };
+type SocialLink = 
+ record {
+   platform: text;
+   url: text;
+ };
 type Resource = 
  record {
    category: Category;
@@ -16,6 +21,11 @@ type Resource =
    groupId: text;
    id: text;
    title: text;
+ };
+type ProfileAssetResult = 
+ variant {
+   err: text;
+   ok: text;
  };
 type Need = 
  record {
@@ -57,8 +67,11 @@ type Group =
    id: text;
    name: text;
    phone: opt text;
+   profilePicturePath: opt text;
    roles: vec GroupRole;
+   socialLinks: vec SocialLink;
    userIds: vec text;
+   website: opt text;
  };
 type Event = 
  record {
@@ -86,21 +99,26 @@ type Category =
    StorageSpace;
  };
 service : {
+  admin_get_asset_storage_canister: () -> (opt principal) query;
   admin_remove_group: (groupId: text) -> (bool);
+  admin_set_asset_storage_canister: (p: principal) -> (bool);
   admin_update_group: (groupId: text, name: opt text, email: opt text,
-   address: opt text, phone: opt text) -> (bool);
+   address: opt text, phone: opt text, website: opt text, socialLinks:
+   opt vec SocialLink, profilePicturePath: opt text) -> (bool);
   approve_join_request: (requestId: text) -> (bool);
   assign_role: ("principal": principal) -> (bool);
   create_event: (title: text, dateRange: DateRange, timeRange: text) ->
    (opt Event);
   create_group: (name: text, email: text, roles: vec GroupRole, address:
-   opt text, phone: opt text) -> (opt Group);
+   opt text, phone: opt text, website: opt text, socialLinks: vec SocialLink,
+   profilePicturePath: opt text) -> (opt Group);
   create_need: (title: text, description: text, category: Category,
    dateRange: opt DateRange) -> (opt Need);
   create_resource: (title: text, description: text, category: Category,
    dateRange: opt DateRange) -> (opt Resource);
   create_user: (displayName: text) -> (opt User);
   delete_event: (eventId: text) -> (bool);
+  delete_group_profile_asset: (key: text) -> (ProfileAssetResult);
   delete_me: () -> (bool);
   delete_need: (needId: text) -> (bool);
   delete_resource: (resourceId: text) -> (bool);
@@ -136,11 +154,14 @@ service : {
   remove_group: (groupId: text) -> (bool);
   request_join_group: (groupId: text) -> (opt JoinRequest);
   set_active_group: (groupId: opt text) -> (bool);
+  store_group_profile_asset: (groupId: text, key: text, content: blob,
+   contentType: text, contentSha256: vec nat8) -> (ProfileAssetResult);
   suspend_user: (userId: text) -> (bool);
   unsuspend_user: (userId: text) -> (bool);
   update_display_name: (displayName: text) -> (bool);
   update_event: (eventId: text, title: opt text, dateRange: opt DateRange,
    timeRange: opt text) -> (bool);
   update_group: (groupId: text, name: opt text, email: opt text, address:
-   opt text, phone: opt text) -> (bool);
+   opt text, phone: opt text, website: opt text, socialLinks:
+   opt vec SocialLink, profilePicturePath: opt text) -> (bool);
 }

@@ -1,13 +1,29 @@
 // A Seed ICP Exchange Platform - Main canister
+//
+// --- Stable storage layout (upgrade-safe) ---
+// - `_schemaVersion` (Nat): bump and run migration logic in postupgrade when record shapes change.
+// - Counters and rate-limit fields: unchanged, stable vars.
+// - Entity maps: `OrderedMap.Map` from base (red-black tree; stable when K/V are stable). Updates are
+//   O(log n) persistent structure updates, not a full rewrite of the whole map each time.
+// - Limits: map size is bounded by subnet memory; very large maps increase upgrade deserialization cost.
+// - Admins: `OrderedMap.Map<Principal, Bool>` with the same persistence model.
+// - No preupgrade/postupgrade hooks: maps are stable types; avoid serializing the entire heap on upgrade.
+// - First deploy after this change: heap-only maps from older Wasm were already empty on upgrade;
+//   persisted data starts from stable memory from this version onward.
+//
+// Verify locally (dfx): deploy → create user/group → `dfx deploy aseed_backend` (same id) →
+// query `get_me` / `list_groups` and confirm data still present.
 
 import Array "mo:base/Array";
+import Blob "mo:base/Blob";
 import Buffer "mo:base/Buffer";
-import HashMap "mo:base/HashMap";
+import Error "mo:base/Error";
 import Iter "mo:base/Iter";
 import Nat "mo:base/Nat";
 import Principal "mo:base/Principal";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
+import OrderedMap "mo:base/OrderedMap";
 
 import AccessControl "access-control";
 import Approval "approval";
@@ -18,18 +34,24 @@ import Resources "resources";
 import Types "types";
 import Users "users";
 
+/// Asset canister for this app (dfx injects principal via --actor-alias). Backend must be a controller of it to `store`.
+import AseedFrontend "canister:aseed_frontend";
+
 persistent actor Main {
   type Category = Types.Category;
   type DateRange = Types.DateRange;
   type Event = Types.Event;
   type Group = Types.Group;
   type GroupRole = Types.GroupRole;
+  type SocialLink = Types.SocialLink;
   type JoinRequest = Types.JoinRequest;
   type Need = Types.Need;
   type Resource = Types.Resource;
   type User = Types.User;
 
-  // Stable storage (simplified - full upgrade in Phase 5)
+  /// Bump when persisted types or map layout change; use postupgrade to migrate `_schemaVersion` N → N+1.
+  private stable var _schemaVersion : Nat = 1;
+
   private stable var _nextUserId : Nat = 0;
   private stable var _nextGroupId : Nat = 0;
   private stable var _nextResourceId : Nat = 0;
@@ -38,32 +60,153 @@ persistent actor Main {
   private stable var _nextJoinRequestId : Nat = 0;
   private stable var _groupCreationDay : Int = 0;
   private stable var _groupsCreatedToday : Nat = 0;
+  /// Optional override for the asset canister principal; if null, `Principal.fromActor(AseedFrontend)` is used.
+  private stable var _assetStorageCanisterId : ?Principal = null;
 
-  private transient let admins = AccessControl.createAdminSet();
+  private stable var admins = AccessControl.createAdminSet();
 
-  private transient let users = HashMap.HashMap<Text, User>(50, Text.equal, Text.hash);
-  private transient let principalToUserId = HashMap.HashMap<Principal, Text>(50, Principal.equal, Principal.hash);
-  private transient let groups = HashMap.HashMap<Text, Group>(50, Text.equal, Text.hash);
-  private transient let resources = HashMap.HashMap<Text, Resource>(100, Text.equal, Text.hash);
-  private transient let needs = HashMap.HashMap<Text, Need>(100, Text.equal, Text.hash);
-  private transient let events = HashMap.HashMap<Text, Event>(50, Text.equal, Text.hash);
-  private transient let joinRequests = HashMap.HashMap<Text, JoinRequest>(50, Text.equal, Text.hash);
-  private transient let userJoinRequests = HashMap.HashMap<Text, [Text]>(50, Text.equal, Text.hash); // userId -> [requestIds]
+  /// Text-keyed maps (shared `Operations` instance for all Text-key tables).
+  /// Transient: only the `Map` values below are persisted; `Operations` is a pure helper.
+  private transient let txt = OrderedMap.Make<Text>(Text.compare);
+  private transient let pr = OrderedMap.Make<Principal>(Principal.compare);
+  private stable var users = txt.empty<User>();
+  private stable var principalToUserId = pr.empty<Text>();
+  private stable var groups = txt.empty<Group>();
+  private stable var resources = txt.empty<Resource>();
+  private stable var needs = txt.empty<Need>();
+  private stable var events = txt.empty<Event>();
+  private stable var joinRequests = txt.empty<JoinRequest>();
+  private stable var userJoinRequests = txt.empty<[Text]>();
+
+  type AssetStorage = actor {
+    store : shared ({
+      key : Text;
+      content : Blob;
+      sha256 : ?Blob;
+      content_type : Text;
+      content_encoding : Text;
+    }) -> async ();
+    delete_asset : shared { key : Text } -> async ();
+  };
+
+  public type ProfileAssetResult = { #ok : Text; #err : Text };
 
   // Admin: assign role. Callable by: (1) existing admins, or (2) when admins empty, by any authenticated user (first-caller becomes admin - deployer should call this immediately after deploy)
   public shared (msg) func assign_role(principal : Principal) : async Bool {
     let caller = msg.caller;
     if (Principal.isAnonymous(caller)) { return false };
     if (AccessControl.isAdmin(admins, caller)) {
-      AccessControl.addAdmin(admins, principal);
+      admins := AccessControl.addAdmin(admins, principal);
       return true
     };
     // When no admins yet: first caller adds themselves (principal must equal caller)
-    if (admins.size() == 0 and principal == caller) {
-      AccessControl.addAdmin(admins, principal);
+    if (admins.size == 0 and principal == caller) {
+      admins := AccessControl.addAdmin(admins, principal);
       return true
     };
     false
+  };
+
+  /// Optional: override asset canister principal (defaults to `canister:aseed_frontend` from dfx).
+  /// One-time local setup (controllers alone do not grant Commit on modern asset canisters):
+  /// - dfx canister update-settings aseed_frontend --add-controller "$(dfx canister id aseed_backend)"
+  /// - dfx canister call aseed_frontend authorize "(principal \"$(dfx canister id aseed_backend)\")"
+  public shared (msg) func admin_set_asset_storage_canister(p : Principal) : async Bool {
+    if (not AccessControl.isAdmin(admins, msg.caller)) { return false };
+    _assetStorageCanisterId := ?p;
+    true
+  };
+
+  public query func admin_get_asset_storage_canister() : async ?Principal {
+    _assetStorageCanisterId
+  };
+
+  func resolvedAssetStoragePid() : Principal {
+    switch (_assetStorageCanisterId) {
+      case (?p) p;
+      case null { Principal.fromActor(AseedFrontend) }
+    }
+  };
+
+  func stripLeadingSlashes(t : Text) : Text {
+    var s = t;
+    label L loop {
+      if (not Text.startsWith(s, #text "/")) { break L };
+      switch (Text.stripStart(s, #char '/')) {
+        case (?rest) { s := rest; continue L };
+        case null { break L }
+      }
+    };
+    s
+  };
+
+  func isProfileKeyForGroup(groupId : Text, key : Text) : Bool {
+    let k = stripLeadingSlashes(key);
+    let prefix = "groups/" # groupId # "/";
+    if (not Text.startsWith(k, #text prefix)) { return false };
+    if (Text.contains(k, #text "..")) { return false };
+    if (k.size() <= prefix.size()) { return false };
+    true
+  };
+
+  func groupIdFromProfileAssetKey(key : Text) : ?Text {
+    let k = stripLeadingSlashes(key);
+    let segs = Iter.toArray(Text.split(k, #char '/'));
+    if (segs.size() < 3) { return null };
+    if (segs[0] != "groups") { return null };
+    if (segs[1] == "") { return null };
+    ?segs[1]
+  };
+
+  /// Group members upload profile images via the backend so the asset canister sees the backend as caller (controller).
+  public shared (msg) func store_group_profile_asset(
+    groupId : Text,
+    key : Text,
+    content : Blob,
+    contentType : Text,
+    contentSha256 : [Nat8],
+  ) : async ProfileAssetResult {
+    if (Principal.isAnonymous(msg.caller)) { return #err("Anonymous caller") };
+    if (not isGroupMember(msg.caller, groupId)) { return #err("Not a group member") };
+    if (not isProfileKeyForGroup(groupId, key)) { return #err("Invalid asset key") };
+    if (not Text.startsWith(contentType, #text "image/")) { return #err("Not an image content type") };
+    let maxBytes : Nat = 300 * 1024;
+    if (content.size() > maxBytes) { return #err("Image too large") };
+    if (contentSha256.size() != 32) { return #err("Invalid sha256 length") };
+    let assetPid = resolvedAssetStoragePid();
+    let assets : AssetStorage = actor (Principal.toText(assetPid));
+    let storeKey = if (Text.startsWith(key, #text "/")) { key } else { "/" # key };
+    try {
+      await assets.store({
+        key = storeKey;
+        content = content;
+        sha256 = ?Blob.fromArray(contentSha256);
+        content_type = contentType;
+        content_encoding = "identity";
+      });
+      #ok(stripLeadingSlashes(key))
+    } catch (e) {
+      #err("Asset canister store failed: " # Error.message(e))
+    }
+  };
+
+  public shared (msg) func delete_group_profile_asset(key : Text) : async ProfileAssetResult {
+    if (Principal.isAnonymous(msg.caller)) { return #err("Anonymous caller") };
+    if (Text.contains(key, #text "..")) { return #err("Invalid asset key") };
+    let gid = switch (groupIdFromProfileAssetKey(key)) {
+      case null { return #err("Invalid asset key") };
+      case (?g) g
+    };
+    if (not isGroupMember(msg.caller, gid)) { return #err("Not a group member") };
+    let assetPid = resolvedAssetStoragePid();
+    let assets : AssetStorage = actor (Principal.toText(assetPid));
+    let delKey = if (Text.startsWith(key, #text "/")) { key } else { "/" # key };
+    try {
+      await assets.delete_asset({ key = delKey });
+      #ok("")
+    } catch (e) {
+      #err("Asset canister delete failed: " # Error.message(e))
+    }
   };
 
   public query func health() : async Text { "ok" };
@@ -72,37 +215,37 @@ persistent actor Main {
   public shared (msg) func create_user(displayName : Text) : async ?User {
     let principal = msg.caller;
     if (Principal.isAnonymous(principal)) { return null };
-    switch (principalToUserId.get(principal)) {
+    switch (pr.get(principalToUserId,principal)) {
       case (?_) { return null }; // already exists
       case null {
         let userId = "u" # Nat.toText(_nextUserId);
         _nextUserId += 1;
         let user = Users.userFromPrincipal(principal, displayName, userId);
-        users.put(userId, user);
-        principalToUserId.put(principal, userId);
+        users := txt.put(users,userId, user);
+        principalToUserId := pr.put(principalToUserId,principal, userId);
         ?user
       }
     }
   };
 
   public shared query (msg) func get_me() : async ?User {
-    switch (principalToUserId.get(msg.caller)) {
-      case (?userId) { users.get(userId) };
+    switch (pr.get(principalToUserId,msg.caller)) {
+      case (?userId) { txt.get(users,userId) };
       case null { null }
     }
   };
 
   public shared query (msg) func get_user(userId : Text) : async ?User {
-    users.get(userId)
+    txt.get(users,userId)
   };
 
   public shared (msg) func update_display_name(displayName : Text) : async Bool {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             let updated = { u with displayName = displayName };
-            users.put(userId, updated);
+            users := txt.put(users,userId, updated);
             true
           };
           case null { false }
@@ -113,9 +256,9 @@ persistent actor Main {
   };
 
   public shared (msg) func set_active_group(groupId : ?Text) : async Bool {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             switch (groupId) {
               case (?gid) {
@@ -124,7 +267,7 @@ persistent actor Main {
               case null { }
             };
             let updated = { u with activeGroupId = groupId };
-            users.put(userId, updated);
+            users := txt.put(users,userId, updated);
             true
           };
           case null { false }
@@ -135,10 +278,10 @@ persistent actor Main {
   };
 
   public shared (msg) func delete_me() : async Bool {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        users.delete(userId);
-        principalToUserId.delete(msg.caller);
+        users := txt.remove(users, userId).0;
+        principalToUserId := pr.remove(principalToUserId, msg.caller).0;
         true
       };
       case null { false }
@@ -157,18 +300,49 @@ persistent actor Main {
     _groupsCreatedToday < 100
   };
 
-  public shared (msg) func create_group(name : Text, email : Text, roles : [GroupRole], address : ?Text, phone : ?Text) : async ?Group {
+  public shared (msg) func create_group(
+    name : Text,
+    email : Text,
+    roles : [GroupRole],
+    address : ?Text,
+    phone : ?Text,
+    website : ?Text,
+    socialLinks : [SocialLink],
+    profilePicturePath : ?Text,
+  ) : async ?Group {
     switch (Groups.validateGroup(name, email)) {
       case (?err) { return null };
       case null { }
     };
+    switch (website) {
+      case (?w) {
+        switch (Groups.validateOptionalWebsite(w)) {
+          case (?_) { return null };
+          case null { };
+        }
+      };
+      case null { };
+    };
+    switch (Groups.validateSocialLinks(socialLinks)) {
+      case (?_) { return null };
+      case null { };
+    };
     if (not checkGroupRateLimit()) { return null };
 
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
         let groupId = "g" # Nat.toText(_nextGroupId);
         _nextGroupId += 1;
         _groupsCreatedToday += 1;
+
+        let site = switch (website) {
+          case (?w) { Groups.normalizeOptionalWebsite(w) };
+          case null { null };
+        };
+        let pic = switch (profilePicturePath) {
+          case (?p) { Groups.normalizeOptionalPicturePath(p) };
+          case null { null };
+        };
 
         let group : Group = {
           id = groupId;
@@ -178,16 +352,19 @@ persistent actor Main {
           roles = roles;
           address = address;
           phone = phone;
+          website = site;
+          socialLinks = socialLinks;
+          profilePicturePath = pic;
           createdAtNs = Time.now()
         };
-        groups.put(groupId, group);
+        groups := txt.put(groups,groupId, group);
 
         // Add group to user
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             let newGroupIds = Array.append(u.groupIds, [groupId]);
             let newActive = if (u.activeGroupId == null) { ?groupId } else { u.activeGroupId };
-            users.put(userId, { u with groupIds = newGroupIds; activeGroupId = newActive })
+            users := txt.put(users,userId, { u with groupIds = newGroupIds; activeGroupId = newActive })
           };
           case null { }
         };
@@ -198,25 +375,67 @@ persistent actor Main {
   };
 
   public shared query (msg) func get_group(groupId : Text) : async ?Group {
-    groups.get(groupId)
+    txt.get(groups,groupId)
   };
 
   public query func list_groups() : async [Group] {
-    Iter.toArray(groups.vals())
+    Iter.toArray(txt.vals(groups))
   };
 
-  public shared (msg) func update_group(groupId : Text, name : ?Text, email : ?Text, address : ?Text, phone : ?Text) : async Bool {
+  public shared (msg) func update_group(
+    groupId : Text,
+    name : ?Text,
+    email : ?Text,
+    address : ?Text,
+    phone : ?Text,
+    website : ?Text,
+    socialLinks : ?[SocialLink],
+    profilePicturePath : ?Text,
+  ) : async Bool {
     if (not isGroupMember(msg.caller, groupId)) { return false };
-    switch (groups.get(groupId)) {
+    switch (website) {
+      case (?w) {
+        switch (Groups.validateOptionalWebsite(w)) {
+          case (?_) { return false };
+          case null { };
+        }
+      };
+      case null { };
+    };
+    switch (socialLinks) {
+      case (?links) {
+        switch (Groups.validateSocialLinks(links)) {
+          case (?_) { return false };
+          case null { };
+        }
+      };
+      case null { };
+    };
+    switch (txt.get(groups,groupId)) {
       case (?g) {
+        let newWebsite = switch (website) {
+          case (?w) { Groups.normalizeOptionalWebsite(w) };
+          case null { g.website };
+        };
+        let newSocial = switch (socialLinks) {
+          case (?links) { links };
+          case null { g.socialLinks };
+        };
+        let newPic = switch (profilePicturePath) {
+          case (?p) { Groups.normalizeOptionalPicturePath(p) };
+          case null { g.profilePicturePath };
+        };
         let updated = {
           g with
           name = switch (name) { case (?n) n; case null g.name };
           email = switch (email) { case (?e) e; case null g.email };
           address = switch (address) { case (?a) ?a; case null g.address };
-          phone = switch (phone) { case (?p) ?p; case null g.phone }
+          phone = switch (phone) { case (?p) ?p; case null g.phone };
+          website = newWebsite;
+          socialLinks = newSocial;
+          profilePicturePath = newPic;
         };
-        groups.put(groupId, updated);
+        groups := txt.put(groups,groupId, updated);
         true
       };
       case null { false }
@@ -225,12 +444,12 @@ persistent actor Main {
 
   public shared (msg) func remove_group(groupId : Text) : async Bool {
     if (not isGroupMember(msg.caller, groupId)) { return false };
-    groups.delete(groupId);
+    groups := txt.remove(groups, groupId).0;
     true
   };
 
   func isGroupMember(principal : Principal, groupId : Text) : Bool {
-    switch (principalToUserId.get(principal), groups.get(groupId)) {
+    switch (pr.get(principalToUserId,principal), txt.get(groups,groupId)) {
       case (?userId, ?g) {
         Array.find<Text>(g.userIds, func(x) = x == userId) != null
       };
@@ -240,15 +459,16 @@ persistent actor Main {
 
   // --- Resources ---
   public shared (msg) func create_resource(title : Text, description : Text, category : Category, dateRange : ?DateRange) : async ?Resource {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             let groupId = switch (u.activeGroupId) {
               case (?gid) gid;
               case null { return null }
             };
             if (not isGroupMember(msg.caller, groupId)) { return null };
+            if (Text.size(title) > 80 or Text.size(description) > 500) { return null };
 
             let id = "r" # Nat.toText(_nextResourceId);
             _nextResourceId += 1;
@@ -261,7 +481,7 @@ persistent actor Main {
               dateRange = dateRange;
               createdAtNs = Time.now()
             };
-            resources.put(id, r);
+            resources := txt.put(resources,id, r);
             ?r
           };
           case null { null }
@@ -272,15 +492,15 @@ persistent actor Main {
   };
 
   public query func list_resources() : async [Resource] {
-    let all = Iter.toArray(resources.vals());
+    let all = Iter.toArray(txt.vals(resources));
     Array.filter(all, func(r : Resource) : Bool { not Resources.isExpired(r) })
   };
 
   public shared (msg) func delete_resource(resourceId : Text) : async Bool {
-    switch (resources.get(resourceId)) {
+    switch (txt.get(resources,resourceId)) {
       case (?r) {
         if (not isGroupMember(msg.caller, r.groupId)) { return false };
-        resources.delete(resourceId);
+        resources := txt.remove(resources, resourceId).0;
         true
       };
       case null { false }
@@ -289,15 +509,16 @@ persistent actor Main {
 
   // --- Needs ---
   public shared (msg) func create_need(title : Text, description : Text, category : Category, dateRange : ?DateRange) : async ?Need {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             let groupId = switch (u.activeGroupId) {
               case (?gid) gid;
               case null { return null }
             };
             if (not isGroupMember(msg.caller, groupId)) { return null };
+            if (Text.size(title) > 80 or Text.size(description) > 500) { return null };
 
             let id = "n" # Nat.toText(_nextNeedId);
             _nextNeedId += 1;
@@ -310,7 +531,7 @@ persistent actor Main {
               dateRange = dateRange;
               createdAtNs = Time.now()
             };
-            needs.put(id, n);
+            needs := txt.put(needs,id, n);
             ?n
           };
           case null { null }
@@ -321,15 +542,15 @@ persistent actor Main {
   };
 
   public query func list_needs() : async [Need] {
-    let all = Iter.toArray(needs.vals());
+    let all = Iter.toArray(txt.vals(needs));
     Array.filter(all, func(n : Need) : Bool { not Needs.isExpired(n) })
   };
 
   public shared (msg) func delete_need(needId : Text) : async Bool {
-    switch (needs.get(needId)) {
+    switch (txt.get(needs,needId)) {
       case (?n) {
         if (not isGroupMember(msg.caller, n.groupId)) { return false };
-        needs.delete(needId);
+        needs := txt.remove(needs, needId).0;
         true
       };
       case null { false }
@@ -338,9 +559,9 @@ persistent actor Main {
 
   // --- Events ---
   public shared (msg) func create_event(title : Text, dateRange : DateRange, timeRange : Text) : async ?Event {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             let groupId = switch (u.activeGroupId) {
               case (?gid) gid;
@@ -358,7 +579,7 @@ persistent actor Main {
               timeRange = timeRange;
               createdAtNs = Time.now()
             };
-            events.put(id, e);
+            events := txt.put(events,id, e);
             ?e
           };
           case null { null }
@@ -369,11 +590,11 @@ persistent actor Main {
   };
 
   public query func list_events() : async [Event] {
-    Iter.toArray(events.vals())
+    Iter.toArray(txt.vals(events))
   };
 
   public shared (msg) func update_event(eventId : Text, title : ?Text, dateRange : ?DateRange, timeRange : ?Text) : async Bool {
-    switch (events.get(eventId)) {
+    switch (txt.get(events,eventId)) {
       case (?e) {
         if (AccessControl.isAdmin(admins, msg.caller)) {
           let updated = {
@@ -382,7 +603,7 @@ persistent actor Main {
             dateRange = switch (dateRange) { case (?d) d; case null e.dateRange };
             timeRange = switch (timeRange) { case (?t) t; case null e.timeRange }
           };
-          events.put(eventId, updated);
+          events := txt.put(events,eventId, updated);
           true
         } else if (isGroupMember(msg.caller, e.groupId)) {
           let updated = {
@@ -391,7 +612,7 @@ persistent actor Main {
             dateRange = switch (dateRange) { case (?d) d; case null e.dateRange };
             timeRange = switch (timeRange) { case (?t) t; case null e.timeRange }
           };
-          events.put(eventId, updated);
+          events := txt.put(events,eventId, updated);
           true
         } else { false }
       };
@@ -400,9 +621,12 @@ persistent actor Main {
   };
 
   public shared (msg) func delete_event(eventId : Text) : async Bool {
-    switch (events.get(eventId)) {
+    switch (txt.get(events,eventId)) {
       case (?e) {
-        AccessControl.isAdmin(admins, msg.caller) or isGroupMember(msg.caller, e.groupId)
+        if (AccessControl.isAdmin(admins, msg.caller) or isGroupMember(msg.caller, e.groupId)) {
+          events := txt.remove(events, eventId).0;
+          true
+        } else { false }
       };
       case null { false }
     }
@@ -410,21 +634,21 @@ persistent actor Main {
 
   // --- Join requests ---
   public shared (msg) func request_join_group(groupId : Text) : async ?JoinRequest {
-    switch (groups.get(groupId), principalToUserId.get(msg.caller)) {
+    switch (txt.get(groups,groupId), pr.get(principalToUserId,msg.caller)) {
       case (?g, ?userId) {
         if (Array.find<Text>(g.userIds, func(x) = x == userId) != null) { return null }; // already member
 
         let id = "j" # Nat.toText(_nextJoinRequestId);
         _nextJoinRequestId += 1;
         let jr = Approval.createJoinRequest(id, userId, groupId, Time.now());
-        joinRequests.put(id, jr);
+        joinRequests := txt.put(joinRequests,id, jr);
 
-        switch (userJoinRequests.get(userId)) {
+        switch (txt.get(userJoinRequests,userId)) {
           case (?ids) {
-            userJoinRequests.put(userId, Array.append(ids, [id]))
+            userJoinRequests := txt.put(userJoinRequests,userId, Array.append(ids, [id]))
           };
           case null {
-            userJoinRequests.put(userId, [id])
+            userJoinRequests := txt.put(userJoinRequests,userId, [id])
           }
         };
         ?jr
@@ -434,26 +658,26 @@ persistent actor Main {
   };
 
   public shared (msg) func approve_join_request(requestId : Text) : async Bool {
-    switch (joinRequests.get(requestId), principalToUserId.get(msg.caller)) {
+    switch (txt.get(joinRequests,requestId), pr.get(principalToUserId,msg.caller)) {
       case (?jr, ?approverId) {
         if (jr.status != #pending) { return false };
         if (not isGroupMember(msg.caller, jr.groupId)) { return false };
 
-        switch (groups.get(jr.groupId)) {
+        switch (txt.get(groups,jr.groupId)) {
           case (?g) {
             let newUserIds = Array.append(g.userIds, [jr.userId]);
-            groups.put(jr.groupId, { g with userIds = newUserIds });
+            groups := txt.put(groups,jr.groupId, { g with userIds = newUserIds });
 
-            switch (users.get(jr.userId)) {
+            switch (txt.get(users,jr.userId)) {
               case (?u) {
                 let newGroupIds = Array.append(u.groupIds, [jr.groupId]);
                 let newActive = if (u.activeGroupId == null) { ?jr.groupId } else { u.activeGroupId };
-                users.put(jr.userId, { u with groupIds = newGroupIds; activeGroupId = newActive })
+                users := txt.put(users,jr.userId, { u with groupIds = newGroupIds; activeGroupId = newActive })
               };
               case null { }
             };
 
-            joinRequests.put(requestId, { jr with status = #approved; resolvedAtNs = ?Time.now() });
+            joinRequests := txt.put(joinRequests,requestId, { jr with status = #approved; resolvedAtNs = ?Time.now() });
             true
           };
           case null { false }
@@ -464,11 +688,11 @@ persistent actor Main {
   };
 
   public shared (msg) func deny_join_request(requestId : Text) : async Bool {
-    switch (joinRequests.get(requestId), principalToUserId.get(msg.caller)) {
+    switch (txt.get(joinRequests,requestId), pr.get(principalToUserId,msg.caller)) {
       case (?jr, ?approverId) {
         if (jr.status != #pending) { return false };
         if (not isGroupMember(msg.caller, jr.groupId)) { return false };
-        joinRequests.put(requestId, { jr with status = #denied; resolvedAtNs = ?Time.now() });
+        joinRequests := txt.put(joinRequests,requestId, { jr with status = #denied; resolvedAtNs = ?Time.now() });
         true
       };
       case (_, _) { false }
@@ -476,11 +700,11 @@ persistent actor Main {
   };
 
   public shared query (msg) func get_my_join_requests() : async [JoinRequest] {
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (userJoinRequests.get(userId)) {
+        switch (txt.get(userJoinRequests,userId)) {
           case (?ids) {
-            let reqs = Array.mapFilter<Text, JoinRequest>(ids, func(id) = joinRequests.get(id));
+            let reqs = Array.mapFilter<Text, JoinRequest>(ids, func(id) = txt.get(joinRequests,id));
             reqs
           };
           case null { [] }
@@ -492,7 +716,7 @@ persistent actor Main {
 
   public shared query (msg) func get_pending_join_requests(groupId : Text) : async [JoinRequest] {
     if (not isGroupMember(msg.caller, groupId)) { return [] };
-    let all = Iter.toArray(joinRequests.vals());
+    let all = Iter.toArray(txt.vals(joinRequests));
     Array.filter(all, func(jr : JoinRequest) : Bool {
       jr.groupId == groupId and jr.status == #pending
     })
@@ -503,12 +727,12 @@ persistent actor Main {
     resourceMatches : [{ resource : Resource; matchingNeeds : [Need] }];
     needMatches : [{ need : Need; matchingResources : [Resource] }]
   } {
-    let resourcesList = Array.filter(Iter.toArray(resources.vals()), func(r : Resource) : Bool { not Resources.isExpired(r) });
-    let needsList = Array.filter(Iter.toArray(needs.vals()), func(n : Need) : Bool { not Needs.isExpired(n) });
+    let resourcesList = Array.filter(Iter.toArray(txt.vals(resources)), func(r : Resource) : Bool { not Resources.isExpired(r) });
+    let needsList = Array.filter(Iter.toArray(txt.vals(needs)), func(n : Need) : Bool { not Needs.isExpired(n) });
 
-    switch (principalToUserId.get(msg.caller)) {
+    switch (pr.get(principalToUserId,msg.caller)) {
       case (?userId) {
-        switch (users.get(userId)) {
+        switch (txt.get(users,userId)) {
           case (?u) {
             let groupId = switch (u.activeGroupId) {
               case (?gid) gid;
@@ -538,8 +762,8 @@ persistent actor Main {
   };
 
   public query func get_global_matches() : async [{ resource : Resource; need : Need }] {
-    let resourcesList = Array.filter(Iter.toArray(resources.vals()), func(r : Resource) : Bool { not Resources.isExpired(r) });
-    let needsList = Array.filter(Iter.toArray(needs.vals()), func(n : Need) : Bool { not Needs.isExpired(n) });
+    let resourcesList = Array.filter(Iter.toArray(txt.vals(resources)), func(r : Resource) : Bool { not Resources.isExpired(r) });
+    let needsList = Array.filter(Iter.toArray(txt.vals(needs)), func(n : Need) : Bool { not Needs.isExpired(n) });
 
     let buf = Buffer.Buffer<{ resource : Resource; need : Need }>(50);
     for (r in resourcesList.vals()) {
@@ -553,11 +777,15 @@ persistent actor Main {
   };
 
   // --- Admin ---
+  public shared query (msg) func is_admin() : async Bool {
+    AccessControl.isAdmin(admins, msg.caller)
+  };
+
   public shared (msg) func suspend_user(userId : Text) : async Bool {
     if (not AccessControl.isAdmin(admins, msg.caller)) { return false };
-    switch (users.get(userId)) {
+    switch (txt.get(users,userId)) {
       case (?u) {
-        users.put(userId, { u with suspended = true });
+        users := txt.put(users,userId, { u with suspended = true });
         true
       };
       case null { false }
@@ -566,9 +794,9 @@ persistent actor Main {
 
   public shared (msg) func unsuspend_user(userId : Text) : async Bool {
     if (not AccessControl.isAdmin(admins, msg.caller)) { return false };
-    switch (users.get(userId)) {
+    switch (txt.get(users,userId)) {
       case (?u) {
-        users.put(userId, { u with suspended = false });
+        users := txt.put(users,userId, { u with suspended = false });
         true
       };
       case null { false }
@@ -577,27 +805,69 @@ persistent actor Main {
 
   public shared query (msg) func list_all_users() : async [User] {
     if (not AccessControl.isAdmin(admins, msg.caller)) { return [] };
-    Iter.toArray(users.vals())
+    Iter.toArray(txt.vals(users))
   };
 
   public shared (msg) func admin_remove_group(groupId : Text) : async Bool {
     if (not AccessControl.isAdmin(admins, msg.caller)) { return false };
-    groups.delete(groupId);
+    groups := txt.remove(groups, groupId).0;
     true
   };
 
-  public shared (msg) func admin_update_group(groupId : Text, name : ?Text, email : ?Text, address : ?Text, phone : ?Text) : async Bool {
+  public shared (msg) func admin_update_group(
+    groupId : Text,
+    name : ?Text,
+    email : ?Text,
+    address : ?Text,
+    phone : ?Text,
+    website : ?Text,
+    socialLinks : ?[SocialLink],
+    profilePicturePath : ?Text,
+  ) : async Bool {
     if (not AccessControl.isAdmin(admins, msg.caller)) { return false };
-    switch (groups.get(groupId)) {
+    switch (website) {
+      case (?w) {
+        switch (Groups.validateOptionalWebsite(w)) {
+          case (?_) { return false };
+          case null { };
+        }
+      };
+      case null { };
+    };
+    switch (socialLinks) {
+      case (?links) {
+        switch (Groups.validateSocialLinks(links)) {
+          case (?_) { return false };
+          case null { };
+        }
+      };
+      case null { };
+    };
+    switch (txt.get(groups,groupId)) {
       case (?g) {
+        let newWebsite = switch (website) {
+          case (?w) { Groups.normalizeOptionalWebsite(w) };
+          case null { g.website };
+        };
+        let newSocial = switch (socialLinks) {
+          case (?links) { links };
+          case null { g.socialLinks };
+        };
+        let newPic = switch (profilePicturePath) {
+          case (?p) { Groups.normalizeOptionalPicturePath(p) };
+          case null { g.profilePicturePath };
+        };
         let updated = {
           g with
           name = switch (name) { case (?n) n; case null g.name };
           email = switch (email) { case (?e) e; case null g.email };
           address = switch (address) { case (?a) ?a; case null g.address };
-          phone = switch (phone) { case (?p) ?p; case null g.phone }
+          phone = switch (phone) { case (?p) ?p; case null g.phone };
+          website = newWebsite;
+          socialLinks = newSocial;
+          profilePicturePath = newPic;
         };
-        groups.put(groupId, updated);
+        groups := txt.put(groups,groupId, updated);
         true
       };
       case null { false }

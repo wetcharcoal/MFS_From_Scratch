@@ -30,6 +30,34 @@ dfx build aseed_backend --check
 cd frontend && npm run dev
 ```
 
+## Auth Lanes
+
+This project supports two authentication lanes.
+
+- **Local lane (rapid testing)**: uses a local Ed25519 dev identity to avoid Internet Identity delegation mismatch against a local replica.
+- **Staging/mainnet lane (full validation)**: uses Internet Identity (`https://id.ai`) with full certificate/delegation validation.
+
+### Local lane
+
+Copy `frontend/.env.local.example` values into your local frontend env and run against `dfx` local replica.
+
+- `VITE_AUTH_MODE=dev_key`
+- `VITE_DFX_NETWORK=local`
+- `DFX_HOST=http://127.0.0.1:4943`
+
+### Staging/mainnet lane
+
+Copy `frontend/.env.staging.example` values into your deployment/frontend env.
+
+- `VITE_AUTH_MODE=ii`
+- `VITE_DFX_NETWORK=ic`
+- `DFX_HOST=https://icp0.io`
+- `VITE_II_PROVIDER=https://id.ai`
+
+### Safety guardrail
+
+`dev_key` mode is local-only. The app blocks `VITE_AUTH_MODE=dev_key` when `VITE_DFX_NETWORK=ic`.
+
 ## Project Structure
 
 ```

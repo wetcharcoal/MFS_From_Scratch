@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { useBackendActor } from "./hooks/useBackendActor";
 import { ToastProvider } from "./hooks/useToast";
@@ -85,26 +85,39 @@ function OnboardedRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate();
   const actor = useBackendActor();
   const [checking, setChecking] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     if (!actor) return;
-    actor.list_all_users()
-      .then(() => setIsAdmin(true))
-      .catch(() => setIsAdmin(false))
-      .finally(() => setChecking(false));
+    let cancelled = false;
+    setChecking(true);
+    actor
+      .is_admin()
+      .then((ok) => {
+        if (!cancelled) setIsAdmin(ok);
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false);
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [actor]);
 
-  useEffect(() => {
-    if (checking) return;
-    if (!isAdmin) navigate("/", { replace: true });
-  }, [checking, isAdmin, navigate]);
-
+  if (!actor) return <div className="p-8">Loading...</div>;
   if (checking) return <div className="p-8">Loading...</div>;
-  if (!isAdmin) return null;
+  if (!isAdmin) {
+    return (
+      <Layout>
+        <p className="text-lg text-neutral-600">You&apos;re not an admin</p>
+      </Layout>
+    );
+  }
   return <>{children}</>;
 }
 
@@ -112,7 +125,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
-      <main className="flex-1 container py-6">{children}</main>
+      <main className="flex-1 container px-60 py-6">{children}</main>
       <Footer />
     </div>
   );
@@ -190,25 +203,31 @@ function AppRoutes() {
         <Route
           path="/admin/groups"
           element={
-            <AdminRoute>
-              <Layout><GroupsAdmin /></Layout>
-            </AdminRoute>
+            <ProtectedRoute>
+              <AdminRoute>
+                <Layout><GroupsAdmin /></Layout>
+              </AdminRoute>
+            </ProtectedRoute>
           }
         />
         <Route
           path="/admin/users"
           element={
-            <AdminRoute>
-              <Layout><UsersAdmin /></Layout>
-            </AdminRoute>
+            <ProtectedRoute>
+              <AdminRoute>
+                <Layout><UsersAdmin /></Layout>
+              </AdminRoute>
+            </ProtectedRoute>
           }
         />
         <Route
           path="/admin/events"
           element={
-            <AdminRoute>
-              <Layout><EventManagement /></Layout>
-            </AdminRoute>
+            <ProtectedRoute>
+              <AdminRoute>
+                <Layout><EventManagement /></Layout>
+              </AdminRoute>
+            </ProtectedRoute>
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

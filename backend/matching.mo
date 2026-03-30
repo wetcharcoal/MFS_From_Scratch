@@ -5,7 +5,6 @@ import Time "mo:base/Time";
 
 module {
   public func resourcesMatchNeed(resource : Types.Resource, need : Types.Need) : Bool {
-    if (resource.groupId == need.groupId) { return false }; // same group, no match
     if (resource.category != need.category) { return false };
 
     switch (resource.dateRange, need.dateRange) {
