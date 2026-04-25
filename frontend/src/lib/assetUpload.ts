@@ -1,6 +1,7 @@
 import type { ActorSubclass } from "@icp-sdk/core/agent";
 import { sha256 } from "@noble/hashes/sha256";
 import type { _SERVICE } from "@/declarations/aseed_backend.did";
+import { isRunningOnIcPortal } from "@/lib/icPortal";
 
 const MAX_PROFILE_IMAGE_BYTES = 300 * 1024;
 
@@ -13,7 +14,9 @@ export function profileImagePublicUrl(storedPath: string): string {
   const path = storedPath.replace(/^\/+/, "");
   const cid = import.meta.env.VITE_CANISTER_ID_ASEED_FRONTEND;
   if (!cid) return "";
-  const net = import.meta.env.VITE_DFX_NETWORK || "local";
+  const net = isRunningOnIcPortal()
+    ? "ic"
+    : import.meta.env.VITE_DFX_NETWORK || "local";
   if (net === "ic") {
     return `https://${cid}.icp0.io/${path}`;
   }

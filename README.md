@@ -47,12 +47,14 @@ Copy `frontend/.env.local.example` values into your local frontend env and run a
 
 ### Staging/mainnet lane
 
-Copy `frontend/.env.staging.example` values into your deployment/frontend env.
+Use **`npm run build:ic`** in `frontend/` before `dfx deploy --network ic`. That uses `frontend/.env.ic` (and optional `frontend/.env.ic.local`) so `.env.local` dev settings do not leak into the mainnet bundle. See [docs/deployment.md](docs/deployment.md).
 
 - `VITE_AUTH_MODE=ii`
 - `VITE_DFX_NETWORK=ic`
-- `DFX_HOST=https://icp0.io`
+- `VITE_DFX_HOST=https://icp0.io`
 - `VITE_II_PROVIDER=https://id.ai`
+
+`frontend/.env.staging.example` mirrors the same variables for reference.
 
 ### Safety guardrail
 

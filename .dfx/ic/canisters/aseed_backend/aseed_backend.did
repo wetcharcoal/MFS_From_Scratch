@@ -1,0 +1,173 @@
+type User = 
+ record {
+   activeGroupId: opt text;
+   displayName: text;
+   groupIds: vec text;
+   id: text;
+   "principal": principal;
+   suspended: bool;
+ };
+type SocialLink = 
+ record {
+   platform: text;
+   url: text;
+ };
+type Resource = 
+ record {
+   category: Category;
+   createdAtNs: int;
+   dateRange: opt DateRange;
+   description: text;
+   groupId: text;
+   id: text;
+   title: text;
+ };
+type ProfileAssetResult = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type Need = 
+ record {
+   category: Category;
+   createdAtNs: int;
+   dateRange: opt DateRange;
+   description: text;
+   groupId: text;
+   id: text;
+   title: text;
+ };
+type JoinRequest = 
+ record {
+   createdAtNs: int;
+   groupId: text;
+   id: text;
+   resolvedAtNs: opt int;
+   status: variant {
+             approved;
+             denied;
+             pending;
+           };
+   userId: text;
+ };
+type GroupRole = 
+ variant {
+   distribution;
+   educationInformation;
+   equipmentSpace;
+   processing;
+   production;
+   wasteManagement;
+ };
+type Group = 
+ record {
+   address: opt text;
+   createdAtNs: int;
+   email: text;
+   id: text;
+   name: text;
+   phone: opt text;
+   profilePicturePath: opt text;
+   roles: vec GroupRole;
+   socialLinks: vec SocialLink;
+   userIds: vec text;
+   website: opt text;
+ };
+type Event = 
+ record {
+   createdAtNs: int;
+   dateRange: DateRange;
+   groupId: text;
+   id: text;
+   timeRange: text;
+   title: text;
+ };
+type DateRange = 
+ record {
+   endNs: int;
+   startNs: int;
+ };
+type Category = 
+ variant {
+   DistributionSpace;
+   Equipment;
+   EventSpace;
+   FoodDrink;
+   KitchenSpace;
+   Other;
+   Publicity;
+   StorageSpace;
+ };
+service : {
+  admin_get_asset_storage_canister: () -> (opt principal) query;
+  admin_remove_group: (groupId: text) -> (bool);
+  /// Optional: override asset canister principal (defaults to `canister:aseed_frontend` from dfx).
+  /// One-time local setup (controllers alone do not grant Commit on modern asset canisters):
+  /// - dfx canister update-settings aseed_frontend --add-controller "$(dfx canister id aseed_backend)"
+  /// - dfx canister call aseed_frontend authorize "(principal \"$(dfx canister id aseed_backend)\")"
+  admin_set_asset_storage_canister: (p: principal) -> (bool);
+  admin_update_group: (groupId: text, name: opt text, email: opt text,
+   address: opt text, phone: opt text, website: opt text, socialLinks:
+   opt vec SocialLink, profilePicturePath: opt text) -> (bool);
+  approve_join_request: (requestId: text) -> (bool);
+  assign_role: ("principal": principal) -> (bool);
+  create_event: (title: text, dateRange: DateRange, timeRange: text) ->
+   (opt Event);
+  create_group: (name: text, email: text, roles: vec GroupRole, address:
+   opt text, phone: opt text, website: opt text, socialLinks: vec SocialLink,
+   profilePicturePath: opt text) -> (opt Group);
+  create_need: (title: text, description: text, category: Category,
+   dateRange: opt DateRange) -> (opt Need);
+  create_resource: (title: text, description: text, category: Category,
+   dateRange: opt DateRange) -> (opt Resource);
+  create_user: (displayName: text) -> (opt User);
+  delete_event: (eventId: text) -> (bool);
+  delete_group_profile_asset: (key: text) -> (ProfileAssetResult);
+  delete_me: () -> (bool);
+  delete_need: (needId: text) -> (bool);
+  delete_resource: (resourceId: text) -> (bool);
+  deny_join_request: (requestId: text) -> (bool);
+  get_global_matches: () ->
+   (vec record {
+          need: Need;
+          resource: Resource;
+        }) query;
+  get_group: (groupId: text) -> (opt Group) query;
+  get_matches_for_my_group: () ->
+   (record {
+      needMatches: vec record {
+                         matchingResources: vec Resource;
+                         need: Need;
+                       };
+      resourceMatches:
+       vec record {
+             matchingNeeds: vec Need;
+             resource: Resource;
+           };
+    }) query;
+  get_me: () -> (opt User) query;
+  get_my_join_requests: () -> (vec JoinRequest) query;
+  get_pending_join_requests: (groupId: text) -> (vec JoinRequest) query;
+  get_user: (userId: text) -> (opt User) query;
+  health: () -> (text) query;
+  is_admin: () -> (bool) query;
+  list_all_users: () -> (vec User) query;
+  list_events: () -> (vec Event) query;
+  list_groups: () -> (vec Group) query;
+  list_needs: () -> (vec Need) query;
+  list_resources: () -> (vec Resource) query;
+  remove_group: (groupId: text) -> (bool);
+  request_join_group: (groupId: text) -> (opt JoinRequest);
+  set_active_group: (groupId: opt text) -> (bool);
+  /// Group members upload profile images via the backend so the asset canister sees the backend as caller (controller).
+  store_group_profile_asset: (groupId: text, key: text, content: blob,
+   contentType: text, contentSha256: vec nat8) -> (ProfileAssetResult);
+  suspend_user: (userId: text) -> (bool);
+  unsuspend_user: (userId: text) -> (bool);
+  update_display_name: (displayName: text) -> (bool);
+  update_event: (eventId: text, title: opt text, dateRange: opt DateRange,
+   timeRange: opt text) -> (bool);
+  update_group: (groupId: text, name: opt text, email: opt text, address:
+   opt text, phone: opt text, website: opt text, socialLinks:
+   opt vec SocialLink, profilePicturePath: opt text) -> (bool);
+}

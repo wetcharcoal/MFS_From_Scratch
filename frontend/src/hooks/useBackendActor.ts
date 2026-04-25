@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createActor } from "@/declarations";
 import { useAuth } from "@/contexts/AuthContext";
+import { isIcPortalHostname } from "@/lib/icPortal";
 import { HttpAgent } from "@icp-sdk/core/agent";
 
 export function useBackendActor(): ReturnType<typeof createActor> | null {
@@ -15,11 +16,17 @@ export function useBackendActor(): ReturnType<typeof createActor> | null {
 
     let cancelled = false;
     const canisterId = import.meta.env.VITE_CANISTER_ID_ASEED_BACKEND || "rrkah-fqaaa-aaaaa-aaaaq-cai";
-    const host =
-      import.meta.env.VITE_DFX_HOST ||
-      import.meta.env.DFX_HOST ||
-      "http://127.0.0.1:4943";
-    const isLocal = (import.meta.env.VITE_DFX_NETWORK || "local") !== "ic";
+    const onIcPortal =
+      typeof window !== "undefined" && isIcPortalHostname(window.location.hostname);
+    const host = onIcPortal
+      ? import.meta.env.VITE_DFX_HOST ||
+        import.meta.env.DFX_HOST ||
+        "https://icp0.io"
+      : import.meta.env.VITE_DFX_HOST ||
+        import.meta.env.DFX_HOST ||
+        "http://127.0.0.1:4943";
+    const isLocal =
+      !onIcPortal && (import.meta.env.VITE_DFX_NETWORK || "local") !== "ic";
 
     const agent = new HttpAgent({
       identity,

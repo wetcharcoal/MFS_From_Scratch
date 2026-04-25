@@ -56,6 +56,8 @@ npm install
 npm run build
 ```
 
+Use `npm run build` only for local or ad-hoc bundles. **Do not** use that output for `dfx deploy --network ic` if your `.env.local` sets `VITE_AUTH_MODE=dev_key` — use `npm run build:ic` instead (see Mainnet Deployment).
+
 For development with hot reload:
 
 ```bash
@@ -74,19 +76,30 @@ Or: in the app, call `assign_role` with your II principal (only works when no ad
 
 ## Mainnet Deployment
 
-### 1. Configure for IC
+### 1. Set mainnet canister IDs in the IC build env
 
-Set `DFX_NETWORK=ic` and use mainnet replica. Update Internet Identity provider in the frontend to `https://id.ai`.
+The frontend reads `VITE_*` variables **at build time**. For mainnet you must produce assets with Internet Identity and `VITE_DFX_NETWORK=ic`.
 
-### 2. Create canisters on mainnet
+1. Edit `frontend/.env.ic` and replace the placeholder canister IDs with your IC IDs (or copy `frontend/.env.ic.local.example` to `frontend/.env.ic.local` and set IDs there — that file overrides `.env.ic` and is loaded after `.env.local`).
+
+2. Vite loads env files in this order for `vite build --mode ic`: `.env`, `.env.local`, `.env.ic`, `.env.ic.local`. Later files override earlier keys, so **`npm run build:ic` is deterministic** even if `.env.local` exists for local dev.
+
+Committed `frontend/.env.ic` already sets `VITE_AUTH_MODE=ii`, `VITE_II_PROVIDER=https://id.ai`, `VITE_DFX_NETWORK=ic`, and `VITE_DFX_HOST=https://icp0.io`.
+
+### 2. Build the frontend for IC, then deploy
+
+From the repo root:
 
 ```bash
+cd frontend && npm install && npm run build:ic && cd ..
 dfx deploy --network ic
 ```
 
-### 3. Update frontend env
+`dfx.json` points the asset canister at `frontend/dist`; the deploy step uploads whatever was last built.
 
-Point to mainnet canister IDs and `DFX_NETWORK=ic`, `DFX_HOST=https://mainnet.dfinity.network`.
+### 3. Verify the live login page
+
+Open your frontend URL (`https://<frontend-canister-id>.icp0.io/login`). You should see **“Login to continue”** (Internet Identity), not **“Continue (Local Dev Identity)”**. If you still see the dev button, the bundle was not built with `build:ic` or canister IDs in `.env.ic` / `.env.ic.local` are wrong.
 
 ## Canister Upgrade
 

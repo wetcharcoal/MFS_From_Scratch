@@ -2,9 +2,10 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { AuthClient } from "@icp-sdk/auth/client";
 import type { Identity } from "@icp-sdk/core/agent";
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity";
+import { getEffectiveAuthMode } from "@/lib/icPortal";
 
 const II_PROVIDER = import.meta.env.VITE_II_PROVIDER || "https://id.ai";
-const AUTH_MODE = import.meta.env.VITE_AUTH_MODE || "ii";
+const BUILD_AUTH_MODE = import.meta.env.VITE_AUTH_MODE || "ii";
 const DFX_NETWORK = import.meta.env.VITE_DFX_NETWORK || import.meta.env.DFX_NETWORK || "local";
 const DEV_IDENTITY_STORAGE_KEY = "aseed.dev.identity";
 
@@ -49,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    if (AUTH_MODE === "dev_key" && DFX_NETWORK === "ic") {
+    if (BUILD_AUTH_MODE === "dev_key" && DFX_NETWORK === "ic") {
       console.error(
         "Blocked unsafe auth mode: VITE_AUTH_MODE=dev_key cannot be used with VITE_DFX_NETWORK=ic."
       );
@@ -62,7 +63,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (AUTH_MODE === "dev_key") {
+    const authMode = getEffectiveAuthMode();
+
+    if (authMode === "dev_key") {
       console.warn("DEV AUTH MODE ACTIVE: using a local Ed25519 identity for localhost testing.");
       const identity = loadDevIdentity();
       setState({
@@ -87,7 +90,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async () => {
-    if (AUTH_MODE === "dev_key") {
+    const authMode = getEffectiveAuthMode();
+
+    if (authMode === "dev_key") {
       if (DFX_NETWORK === "ic") {
         console.error(
           "Refusing dev_key login on ic network. Set VITE_AUTH_MODE=ii for staging/mainnet."
@@ -123,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    if (AUTH_MODE === "dev_key") {
+    if (getEffectiveAuthMode() === "dev_key") {
       if (typeof window !== "undefined") {
         window.localStorage.removeItem(DEV_IDENTITY_STORAGE_KEY);
       }
