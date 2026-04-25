@@ -1,8 +1,8 @@
 export function Footer() {
   return (
     <footer className="border-t py-6 md:py-0">
-      <div className="container flex flex-col items-center justify-center gap-4 md:h-24 md:flex-row">
-        <p className="text-center text-sm text-muted-foreground">
+      <div className="container mx-auto flex flex-col items-center justify-center gap-4 px-4 sm:px-6 md:px-8 lg:px-12 md:h-24 md:flex-row">
+        <p className="mx-auto w-full max-w-3xl text-center text-sm text-muted-foreground">
           Welcome to aseed.ca! Questions? Email us at{" "}
           <a
             href="mailto:mcgillfoodco@gmail.com"
